@@ -8,6 +8,7 @@
   "dependencies": {
     "express": "^4.19.2",
     "parse": "^3.4.4",
-    "@wppconnect-team/wppconnect": "^1.5.1"
+    "wppconnect": "^1.8.0",
+    "fs": "0.0.1-security"
   }
 }
