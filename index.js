@@ -2,46 +2,53 @@ const Parse = require('parse/node');
 Parse.initialize("Yo7aFmDqSDkWaUhdG4INURZzRQ0qIYNJohfBFajJ", "Sqmmtd0qegDYFAEyPW0phkHYw3aMFlAMCKDrEiQP");
 Parse.serverURL = "https://parseapi.back4app.com/";
 
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode');
 const express = require('express');
+const qrcode = require('qrcode');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 
-let qrActual = ""; // Para almacenar el QR y mostrarlo en la web
+let qrActual = "";
 
-// ---------- SERVIDOR WEB PARA VER QR ----------
+// =============================
+// SERVIDOR WEB (VER QR EN RAILWAY)
+// =============================
 const app = express();
+
 app.get('/qr', (req, res) => {
     if (!qrActual) return res.send("QR aún no generado...");
     res.send(`
-        <h1>Escanea este código QR</h1>
-        <img src="${qrActual}" style="width:300px;">
+        <h1>Escanea este QR</h1>
+        <img src="${qrActual}" width="350">
     `);
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Servidor QR web activo en puerto", PORT));
+app.listen(PORT, () => console.log("Servidor QR iniciado en puerto", PORT));
 
 
-// ---------- WHATSAPP ----------
+// =============================
+// CONFIGURACIÓN WHATSAPP
+// =============================
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        args: ["--no-sandbox", "--disable-setuid-sandbox"]
     }
 });
 
 client.on('qr', async qr => {
-    console.log("Nuevo QR generado!");
-    qrActual = await qrcode.toDataURL(qr);
+    console.log("Nuevo QR generado");
+    qrActual = await qrcode.toDataURL(qr); // QR en imagen para /qr
 });
 
 client.on('ready', () => {
-    console.log("WhatsApp listo");
+    console.log("WhatsApp conectado y funcionando");
 });
 
 
-// ---------- BACK4APP ----------
+// =============================
+// BACK4APP
+// =============================
 async function buscarEmpleadoPorNumero(numero) {
     const Employees = Parse.Object.extend("Employees");
     const query = new Parse.Query(Employees);
@@ -63,20 +70,27 @@ async function guardarFichajeEnBack4app({ nombre, dni, numero, empresa, accion, 
     if (empresa) entry.set("empresa", empresa);
 
     if (latitud && longitud) {
-        entry.set("ubicacion", new Parse.GeoPoint({ latitude: latitud, longitude: longitud }));
+        entry.set("ubicacion", new Parse.GeoPoint({
+            latitude: latitud,
+            longitude: longitud
+        }));
     }
 
     await entry.save();
     console.log("Fichaje guardado en Back4App");
 }
 
+
+// =============================
+// LOGICA PRINCIPAL DEL BOT
+// =============================
 const esperandoUbicacion = new Map();
 
 client.on('message', async msg => {
     const numero = msg.from.replace('@c.us', '');
     const texto = msg.body.trim().toUpperCase();
 
-    // Si estamos esperando ubicación
+    // Si estamos esperando la ubicación
     if (esperandoUbicacion.has(numero) && msg.location) {
         const { accion, empleado } = esperandoUbicacion.get(numero);
         esperandoUbicacion.delete(numero);
@@ -91,24 +105,30 @@ client.on('message', async msg => {
             longitud: msg.location.longitude
         });
 
-        msg.reply(`Fichaje de ${accion} guardado correctamente.`);
+        msg.reply(`Fichaje de ${accion} registrado correctamente.`);
         return;
     }
 
-    // Si escribe entrada o salida
+    // Procesar ENTRADA/SALIDA
     if (texto === "ENTRADA" || texto === "SALIDA") {
         const empleado = await buscarEmpleadoPorNumero(numero);
-        if (!empleado) return msg.reply("No estás autorizado para fichar.");
+
+        if (!empleado) {
+            msg.reply("❌ Tu número no está autorizado para fichar.");
+            return;
+        }
 
         esperandoUbicacion.set(numero, { accion: texto, empleado });
-        msg.reply("Envíame tu ubicación.");
+        msg.reply("📍 Envíame tu ubicación para completar el fichaje.");
         return;
     }
 
-    msg.reply('Envía "ENTRADA" o "SALIDA".');
+    msg.reply(`Envía "ENTRADA" o "SALIDA" para fichar.`);
 });
 
 client.initialize();
+
+
 
 
 
