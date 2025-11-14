@@ -1,18 +1,25 @@
+// ============================
+//  BACK4APP CONFIG
+// ============================
 const Parse = require('parse/node');
 Parse.initialize("Yo7aFmDqSDkWaUhdG4INURZzRQ0qIYNJohfBFajJ", "Sqmmtd0qegDYFAEyPW0phkHYw3aMFlAMCKDrEiQP");
 Parse.serverURL = "https://parseapi.back4app.com/";
 
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+// ============================
+//  WHATSAPP + EXPRESS
+// ============================
+const express = require('express');
+const QRCode = require('qrcode');
 
-/*  🔥 CONFIG ESPECIAL PARA RAILWAY 🔥
-    Necesaria para evitar:
-    "Running as root without --no-sandbox is not supported"
-*/
+const { Client, LocalAuth } = require('whatsapp-web.js');
+
+const app = express();
+let qrImage = null;
+
+// Cliente WhatsApp preparado para funcionar en Railway
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
-        headless: true,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -20,41 +27,50 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
+            '--single-process',
             '--disable-gpu'
-        ]
+        ],
+        headless: true
     }
 });
 
-// -------------------------------------
-// QR y conexión
-// -------------------------------------
-client.on('qr', qr => {
-    qrcode.generate(qr, { small: true });
-    console.log('Escanea este código QR con WhatsApp');
+// Mostrar QR en /qr
+client.on('qr', async (qr) => {
+    console.log("QR generado. Ábrelo en /qr");
+    qrImage = await QRCode.toDataURL(qr);
 });
 
+// Cliente listo
 client.on('ready', () => {
-    console.log('WhatsApp conectado y listo');
+    console.log('✅ WhatsApp conectado y listo');
 });
 
-// Estado temporal de usuarios esperando ubicación
-const waitingForLocation = new Map();
+// Ruta para mostrar QR como imagen
+app.get('/qr', (req, res) => {
+    if (!qrImage) return res.send("<h2>⏳ Generando QR... espera 5 segundos y actualiza</h2>");
+    res.send(`
+        <h1>Escanea este QR con WhatsApp</h1>
+        <img src="${qrImage}" style="width: 300px;"/>
+    `);
+});
 
-// -------------------------------------
-// Buscar empleado
-// -------------------------------------
+// Iniciar servidor QR
+app.listen(process.env.PORT || 3000, () => {
+    console.log("Servidor Express activo para ver el QR");
+});
+
+// ============================
+//  FUNCIONES DE BACK4APP
+// ============================
+
 async function buscarEmpleadoPorNumero(numero) {
     const Employees = Parse.Object.extend("Employees");
     const query = new Parse.Query(Employees);
     query.equalTo("telefono", numero);
     query.include("empresa");
-    const resultado = await query.first();
-    return resultado;
+    return await query.first();
 }
 
-// -------------------------------------
-// Guardar fichaje
-// -------------------------------------
 async function guardarFichajeEnBack4app({ nombre, dni, numero, empresa, accion, latitud, longitud }) {
     const TimeEntry = Parse.Object.extend("TimeEntries");
     const entry = new TimeEntry();
@@ -65,50 +81,40 @@ async function guardarFichajeEnBack4app({ nombre, dni, numero, empresa, accion, 
     entry.set("accion", accion);
     entry.set("fecha", new Date());
 
-    // Pointer robusto de empresa
-    let empresaPointer = null;
-
-    if (empresa && typeof empresa.get === 'function') {
-        empresaPointer = empresa;
-    } else if (empresa && empresa.objectId) {
+    // --- Pointer seguro ---
+    if (empresa && empresa.id) {
         const Companies = Parse.Object.extend("Companies");
-        empresaPointer = new Companies();
-        empresaPointer.id = empresa.objectId;
-    } else if (empresa && typeof empresa === 'string') {
-        const Companies = Parse.Object.extend("Companies");
-        empresaPointer = new Companies();
-        empresaPointer.id = empresa;
+        const pointer = new Companies();
+        pointer.id = empresa.id;
+        entry.set("empresa", pointer);
     }
 
-    if (empresaPointer) entry.set("empresa", empresaPointer);
-
-    // Ubicación
-    if (latitud !== undefined && longitud !== undefined) {
-        const point = new Parse.GeoPoint({ latitude: latitud, longitude: longitud });
-        entry.set("ubicacion", point);
+    if (latitud && longitud) {
+        entry.set("ubicacion", new Parse.GeoPoint({ latitude: latitud, longitude: longitud }));
     }
 
     try {
         await entry.save();
         console.log("Fichaje guardado en Back4app");
     } catch (error) {
-        console.error("Error guardando en Back4app:", error);
+        console.error("Error guardando fichaje:", error);
     }
 }
 
-// -------------------------------------
-// Manejo de mensajes
-// -------------------------------------
-client.on('message', async msg => {
+// ============================
+//  LÓGICA DE FICHAJE
+// ============================
 
+const waitingForLocation = new Map();
+
+client.on('message', async msg => {
     console.log('Mensaje recibido:', msg.body);
 
     const numero = msg.from.replace('@c.us', '');
     const texto = msg.body.trim().toUpperCase();
 
-    // Si estamos esperando la ubicación
+    // Si el usuario está enviando la ubicación
     if (waitingForLocation.has(numero) && msg.location) {
-
         const { accion, empleado } = waitingForLocation.get(numero);
         waitingForLocation.delete(numero);
 
@@ -118,43 +124,44 @@ client.on('message', async msg => {
         const latitud = msg.location.latitude;
         const longitud = msg.location.longitude;
 
-        await guardarFichajeEnBack4app({
-            nombre, dni, numero, empresa, accion, latitud, longitud
-        });
+        await guardarFichajeEnBack4app({ nombre, dni, numero, empresa, accion, latitud, longitud });
 
-        msg.reply(`✅ Fichaje de ${accion} registrado para *${nombre}* a las ${new Date().toLocaleTimeString()}.`);
+        msg.reply(`✅ Fichaje de ${accion} registrado para ${nombre} a las ${new Date().toLocaleTimeString()}.`);
         return;
     }
 
-    // Si envían ENTRADA o SALIDA
+    // Comandos ENTRADA / SALIDA
     if (texto === 'ENTRADA' || texto === 'SALIDA') {
         try {
             const empleado = await buscarEmpleadoPorNumero(numero);
 
             if (empleado) {
                 waitingForLocation.set(numero, { accion: texto, empleado });
-                msg.reply('📍 Por favor, comparte tu ubicación para registrar el fichaje.\n(Icono de clip → Ubicación)');
+                msg.reply('📍 Comparte tu ubicación para completar el fichaje.\nUsa el clip ➜ Ubicación.');
             } else {
                 msg.reply('❌ Tu número no está autorizado para fichar.');
             }
 
-        } catch (error) {
-            console.error("Error buscando empleado:", error);
+        } catch (err) {
+            console.error(err);
             msg.reply('❌ Error buscando tus datos.');
         }
+        return;
     }
-    else if (waitingForLocation.has(numero)) {
-        msg.reply('📍 Aún estoy esperando tu ubicación. Por favor, envíala.');
+
+    // Si está esperando ubicación
+    if (waitingForLocation.has(numero)) {
+        msg.reply('⚠️ Aún espero tu ubicación. Usa el icono del clip ➜ Ubicación.');
+        return;
     }
-    else {
-        msg.reply('Envía *ENTRADA* o *SALIDA* para fichar.');
-    }
+
+    // Respuesta genérica
+    msg.reply('Envía "ENTRADA" o "SALIDA" para fichar.');
 });
 
-// -------------------------------------
-// Iniciar WhatsApp
-// -------------------------------------
+// Inicializar WhatsApp
 client.initialize();
+
 
 
 
