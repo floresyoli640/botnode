@@ -18,7 +18,6 @@ app.get('/qr', (req, res) => {
     `);
 });
 
-// Railway asigna puerto automáticamente
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Servidor QR web activo en puerto", PORT));
 
@@ -34,8 +33,6 @@ const client = new Client({
 
 client.on('qr', async qr => {
     console.log("Nuevo QR generado!");
-
-    // Convertir el QR a imagen
     qrActual = await qrcode.toDataURL(qr);
 });
 
@@ -79,6 +76,7 @@ client.on('message', async msg => {
     const numero = msg.from.replace('@c.us', '');
     const texto = msg.body.trim().toUpperCase();
 
+    // Si estamos esperando ubicación
     if (esperandoUbicacion.has(numero) && msg.location) {
         const { accion, empleado } = esperandoUbicacion.get(numero);
         esperandoUbicacion.delete(numero);
@@ -97,6 +95,7 @@ client.on('message', async msg => {
         return;
     }
 
+    // Si escribe entrada o salida
     if (texto === "ENTRADA" || texto === "SALIDA") {
         const empleado = await buscarEmpleadoPorNumero(numero);
         if (!empleado) return msg.reply("No estás autorizado para fichar.");
@@ -110,6 +109,8 @@ client.on('message', async msg => {
 });
 
 client.initialize();
+
+
 
 
 
